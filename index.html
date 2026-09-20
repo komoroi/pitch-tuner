@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ピッチチューナー</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --text: #eef1f5;
+    --sub: #8b93a3;
+    --green: #35d07f;
+    --yellow: #f2c94c;
+    --red: #eb5757;
+    --line: #2a2e38;
+    --accent: #5fa8ff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #app {
+    max-width: 640px;
+    margin: 0 auto;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 20px 48px;
+  }
+  h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--sub);
+    letter-spacing: 0.04em;
+    margin: 0 0 20px;
+  }
+
+  .top-controls {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  button {
+    appearance: none;
+    border: none;
+    border-radius: 12px;
+    padding: 14px 28px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    background: var(--green);
+    color: #04160c;
+    transition: transform 0.06s ease, opacity 0.15s ease;
+  }
+  button:active { transform: scale(0.97); }
+  button.stop { background: var(--red); color: #2a0606; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.secondary { background: var(--accent); color: #041426; }
+
+  .ref-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--sub);
+  }
+  .ref-row input {
+    width: 64px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    text-align: center;
+  }
+  #status {
+    font-size: 13px;
+    color: var(--sub);
+    text-align: center;
+    min-height: 18px;
+    margin-bottom: 16px;
+  }
+
+  .tabs {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .tab-btn {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--sub);
+    border-radius: 12px;
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tab-btn.active {
+    background: var(--accent);
+    color: #041426;
+    border-color: var(--accent);
+  }
+  .tab-content { display: none; width: 100%; }
+  .tab-content.active { display: block; }
+
+  .panel {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 32px 24px;
+    text-align: center;
+  }
+  #note {
+    font-size: 96px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    transition: color 0.12s ease;
+  }
+  #octave {
+    font-size: 32px;
+    font-weight: 400;
+    color: var(--sub);
+    vertical-align: super;
+    margin-left: 4px;
+  }
+  #freq {
+    margin-top: 10px;
+    font-size: 18px;
+    color: var(--sub);
+    font-variant-numeric: tabular-nums;
+  }
+  #target {
+    font-size: 13px;
+    color: var(--sub);
+    margin-top: 2px;
+  }
+  .gauge-wrap {
+    margin-top: 28px;
+    position: relative;
+  }
+  .gauge-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--sub);
+    margin-bottom: 6px;
+    padding: 0 2px;
+  }
+  .gauge {
+    position: relative;
+    height: 14px;
+    border-radius: 8px;
+    background: linear-gradient(to right,
+      var(--red) 0%, var(--yellow) 30%, var(--green) 45%,
+      var(--green) 55%, var(--yellow) 70%, var(--red) 100%);
+    overflow: visible;
+  }
+  .gauge-center {
+    position: absolute;
+    left: 50%;
+    top: -4px;
+    width: 2px;
+    height: 22px;
+    background: rgba(255,255,255,0.5);
+    transform: translateX(-1px);
+  }
+  #needle {
+    position: absolute;
+    top: -7px;
+    width: 4px;
+    height: 28px;
+    background: #fff;
+    border-radius: 2px;
+    left: 50%;
+    transform: translateX(-2px);
+    transition: left 0.06s linear;
+    box-shadow: 0 0 8px rgba(255,255,255,0.6);
+  }
+  #cents {
+    margin-top: 14px;
+    font-size: 14px;
+    color: var(--sub);
+    font-variant-numeric: tabular-nums;
+  }
+  canvas#wave {
+    width: 100%;
+    height: 48px;
+    margin-top: 20px;
+    border-radius: 8px;
+    background: var(--bg);
+    display: block;
+  }
+
+  /* Practice tab */
+  .melody-form {
+    text-align: left;
+    margin-bottom: 18px;
+  }
+  .melody-form label {
+    display: block;
+    font-size: 12px;
+    color: var(--sub);
+    margin-bottom: 6px;
+  }
+  #melodyInput {
+    width: 100%;
+    min-height: 110px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 12px;
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+  .melody-hint {
+    font-size: 11px;
+    color: var(--sub);
+    margin-top: 6px;
+    line-height: 1.6;
+  }
+  .melody-row {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .practice-controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .score-row {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    margin-bottom: 12px;
+  }
+  .score-item { text-align: center; }
+  .score-item .label { font-size: 11px; color: var(--sub); }
+  .score-item .value { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  canvas#practiceCanvas {
+    width: 100%;
+    height: 260px;
+    border-radius: 12px;
+    background: #0b0d12;
+    display: block;
+    border: 1px solid var(--line);
+  }
+  #finalScore {
+    margin-top: 16px;
+    text-align: center;
+    font-size: 15px;
+    color: var(--sub);
+    min-height: 20px;
+  }
+  #finalScore .big {
+    font-size: 40px;
+    font-weight: 800;
+    color: var(--text);
+    display: block;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>PITCH TUNER</h1>
+
+  <div class="top-controls">
+    <button id="toggleBtn">マイクを開始</button>
+    <div class="ref-row">
+      基準ピッチ (A4) =
+      <input id="refPitch" type="number" value="440" min="415" max="466" step="1"> Hz
+    </div>
+  </div>
+  <div id="status">マイクの使用を許可すると計測が始まります</div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="tuner">チューナー</button>
+    <button class="tab-btn" data-tab="practice">メロディ練習</button>
+  </div>
+
+  <div class="tab-content active" id="tab-tuner">
+    <div class="panel">
+      <div>
+        <span id="note">--</span><span id="octave"></span>
+      </div>
+      <div id="freq">-- Hz</div>
+      <div id="target">&nbsp;</div>
+
+      <div class="gauge-wrap">
+        <div class="gauge-labels"><span>-50¢</span><span>0</span><span>+50¢</span></div>
+        <div class="gauge">
+          <div class="gauge-center"></div>
+          <div id="needle"></div>
+        </div>
+      </div>
+      <div id="cents">&nbsp;</div>
+
+      <canvas id="wave" width="600" height="96"></canvas>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-practice">
+    <div class="panel">
+      <div class="melody-form">
+        <label for="melodyInput">メロディ（1行に「音名 拍数」。R=休符）</label>
+        <textarea id="melodyInput">C4 1
+D4 1
+E4 1
+F4 1
+G4 2
+E4 2
+F4 1
+G4 1
+A4 1
+G4 1
+F4 2
+D4 2</textarea>
+        <div class="melody-hint">
+          例: <code>C4 1</code> は「ド（4オクターブ）を1拍」。シャープは <code>C#4</code>、休符は <code>R 1</code>。
+        </div>
+        <div class="melody-row">
+          <div class="ref-row">
+            テンポ (BPM) = <input id="bpmInput" type="number" value="100" min="30" max="240" step="1">
+          </div>
+        </div>
+      </div>
+
+      <div class="practice-controls">
+        <button id="practiceBtn">練習スタート</button>
+      </div>
+
+      <div class="score-row">
+        <div class="score-item">
+          <div class="label">経過</div>
+          <div class="value" id="practiceTime">0.0s</div>
+        </div>
+        <div class="score-item">
+          <div class="label">リアルタイム精度</div>
+          <div class="value" id="liveScore">--</div>
+        </div>
+      </div>
+
+      <canvas id="practiceCanvas" width="900" height="260"></canvas>
+
+      <div id="finalScore"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const noteStrings = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const noteIndex = {C:0,"C#":1,DB:1,D:2,"D#":3,EB:3,E:4,F:5,"F#":6,GB:6,G:7,"G#":8,AB:8,A:9,"A#":10,BB:10,B:11};
+
+function noteNameToMidi(raw) {
+  const m = raw.trim().toUpperCase().match(/^([A-G])(#|B)?(-?\d+)$/);
+  if (!m) return null;
+  const key = m[1] + (m[2] || "");
+  const idx = noteIndex[key];
+  if (idx === undefined) return null;
+  const octave = parseInt(m[3], 10);
+  return (octave + 1) * 12 + idx;
+}
+
+function midiToFreq(midi, refA) {
+  return refA * Math.pow(2, (midi - 69) / 12);
+}
+
+function freqToMidi(freq, refA) {
+  return 12 * Math.log2(freq / refA) + 69;
+}
+
+function midiToNameOctave(midiRounded) {
+  let idx = midiRounded % 12;
+  if (idx < 0) idx += 12;
+  const octave = Math.floor(midiRounded / 12) - 1;
+  return { name: noteStrings[idx], octave };
+}
+
+function frequencyToNote(frequency, refA) {
+  const noteNum = freqToMidi(frequency, refA);
+  const rounded = Math.round(noteNum);
+  const cents = (noteNum - rounded) * 100;
+  const { name, octave } = midiToNameOctave(rounded);
+  const targetFreq = midiToFreq(rounded, refA);
+  return { name, octave, cents, targetFreq };
+}
+
+// ACF2+ autocorrelation pitch detection
+function autoCorrelate(buf, sampleRate) {
+  const SIZE = buf.length;
+  let rms = 0;
+  for (let i = 0; i < SIZE; i++) {
+    const val = buf[i];
+    rms += val * val;
+  }
+  rms = Math.sqrt(rms / SIZE);
+  if (rms < 0.01) return -1;
+
+  let r1 = 0, r2 = SIZE - 1;
+  const thres = 0.2;
+  for (let i = 0; i < SIZE / 2; i++) {
+    if (Math.abs(buf[i]) < thres) { r1 = i; break; }
+  }
+  for (let i = 1; i < SIZE / 2; i++) {
+    if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+  }
+
+  const trimmed = buf.slice(r1, r2);
+  const size2 = trimmed.length;
+  if (size2 < 2) return -1;
+
+  const c = new Float32Array(size2);
+  for (let i = 0; i < size2; i++) {
+    for (let j = 0; j < size2 - i; j++) {
+      c[i] += trimmed[j] * trimmed[j + i];
+    }
+  }
+
+  let d = 0;
+  while (d < size2 - 1 && c[d] > c[d + 1]) d++;
+
+  let maxVal = -1, maxPos = -1;
+  for (let i = d; i < size2; i++) {
+    if (c[i] > maxVal) { maxVal = c[i]; maxPos = i; }
+  }
+  let T0 = maxPos;
+  if (T0 <= 0) return -1;
+
+  if (T0 > 0 && T0 < size2 - 1) {
+    const x1 = c[T0 - 1], x2 = c[T0], x3 = c[T0 + 1];
+    const a = (x1 + x3 - 2 * x2) / 2;
+    const b = (x3 - x1) / 2;
+    if (a !== 0) T0 = T0 - b / (2 * a);
+  }
+
+  if (T0 <= 0) return -1;
+  return sampleRate / T0;
+}
+
+function centsToColor(cents) {
+  const abs = Math.abs(cents);
+  if (abs <= 5) return "#35d07f";
+  if (abs <= 15) return "#f2c94c";
+  return "#eb5757";
+}
+
+// ---------- DOM refs ----------
+const noteEl = document.getElementById("note");
+const octaveEl = document.getElementById("octave");
+const freqEl = document.getElementById("freq");
+const targetEl = document.getElementById("target");
+const needleEl = document.getElementById("needle");
+const centsEl = document.getElementById("cents");
+const statusEl = document.getElementById("status");
+const toggleBtn = document.getElementById("toggleBtn");
+const refPitchInput = document.getElementById("refPitch");
+const waveCanvas = document.getElementById("wave");
+const waveCtx = waveCanvas.getContext("2d");
+
+const melodyInput = document.getElementById("melodyInput");
+const bpmInput = document.getElementById("bpmInput");
+const practiceBtn = document.getElementById("practiceBtn");
+const practiceCanvas = document.getElementById("practiceCanvas");
+const practiceCtx = practiceCanvas.getContext("2d");
+const practiceTimeEl = document.getElementById("practiceTime");
+const liveScoreEl = document.getElementById("liveScore");
+const finalScoreEl = document.getElementById("finalScore");
+
+// ---------- Tabs ----------
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
+  });
+});
+
+// ---------- Shared audio state ----------
+let audioCtx = null;
+let analyser = null;
+let mediaStream = null;
+let rafId = null;
+let micRunning = false;
+let timeBuffer = null;
+let smoothedCents = 0;
+
+async function start() {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+  } catch (err) {
+    statusEl.textContent = "マイクへのアクセスが拒否されました: " + err.message;
+    throw err;
+  }
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  timeBuffer = new Float32Array(analyser.fftSize);
+  source.connect(analyser);
+
+  micRunning = true;
+  toggleBtn.textContent = "マイクを停止";
+  toggleBtn.classList.add("stop");
+  statusEl.textContent = "計測中...";
+  processFrame();
+}
+
+function stop() {
+  micRunning = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+  if (audioCtx) audioCtx.close();
+  audioCtx = null;
+  analyser = null;
+  mediaStream = null;
+
+  resetTunerDisplay();
+  waveCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+
+  toggleBtn.textContent = "マイクを開始";
+  toggleBtn.classList.remove("stop");
+  statusEl.textContent = "マイクの使用を許可すると計測が始まります";
+
+  if (practiceRunning) stopPractice(true);
+}
+
+toggleBtn.addEventListener("click", () => {
+  if (micRunning) stop();
+  else start().catch(() => {});
+});
+
+function resetTunerDisplay() {
+  noteEl.textContent = "--";
+  octaveEl.textContent = "";
+  freqEl.textContent = "-- Hz";
+  targetEl.innerHTML = "&nbsp;";
+  centsEl.innerHTML = "&nbsp;";
+  needleEl.style.left = "50%";
+  noteEl.style.color = "var(--text)";
+}
+
+function processFrame() {
+  analyser.getFloatTimeDomainData(timeBuffer);
+
+  // waveform
+  waveCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+  waveCtx.beginPath();
+  waveCtx.strokeStyle = "#35d07f";
+  waveCtx.lineWidth = 2;
+  const step = Math.floor(timeBuffer.length / waveCanvas.width) || 1;
+  for (let x = 0; x < waveCanvas.width; x++) {
+    const v = timeBuffer[x * step] || 0;
+    const y = waveCanvas.height / 2 + v * waveCanvas.height * 0.45;
+    if (x === 0) waveCtx.moveTo(x, y);
+    else waveCtx.lineTo(x, y);
+  }
+  waveCtx.stroke();
+
+  const refA = parseFloat(refPitchInput.value) || 440;
+  const freq = autoCorrelate(timeBuffer, audioCtx.sampleRate);
+  const validFreq = (freq !== -1 && freq > 30 && freq < 5000) ? freq : null;
+
+  updateTunerUI(validFreq, refA);
+  if (practiceRunning) updatePractice(validFreq, refA);
+
+  rafId = requestAnimationFrame(processFrame);
+}
+
+function updateTunerUI(freq, refA) {
+  if (freq) {
+    const { name, octave, cents, targetFreq } = frequencyToNote(freq, refA);
+    smoothedCents = smoothedCents * 0.4 + cents * 0.6;
+
+    noteEl.textContent = name;
+    octaveEl.textContent = octave;
+    freqEl.textContent = freq.toFixed(1) + " Hz";
+    targetEl.textContent = "目標: " + targetFreq.toFixed(2) + " Hz";
+
+    const clamped = Math.max(-50, Math.min(50, smoothedCents));
+    needleEl.style.left = (50 + clamped) + "%";
+    noteEl.style.color = centsToColor(smoothedCents);
+    centsEl.textContent = (smoothedCents >= 0 ? "+" : "") + smoothedCents.toFixed(1) + " セント";
+    statusEl.textContent = "";
+  } else {
+    resetTunerDisplay();
+    statusEl.textContent = "音を鳴らしてください（十分な音量が必要です）";
+  }
+}
+
+// ---------- Melody parsing ----------
+function parseMelody(text, bpm) {
+  const secPerBeat = 60 / bpm;
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  const notes = [];
+  let t = 0;
+  const errors = [];
+
+  lines.forEach((line, i) => {
+    const parts = line.split(/\s+/);
+    const rawName = parts[0];
+    const beats = parts[1] !== undefined ? parseFloat(parts[1]) : 1;
+    const dur = (isNaN(beats) ? 1 : beats) * secPerBeat;
+
+    if (rawName.toUpperCase() === "R") {
+      notes.push({ isRest: true, start: t, duration: dur, end: t + dur });
+    } else {
+      const midi = noteNameToMidi(rawName);
+      if (midi === null) {
+        errors.push(`${i + 1}行目: "${rawName}" は音名として認識できません`);
+      } else {
+        const { name, octave } = midiToNameOctave(midi);
+        notes.push({ isRest: false, name: name + octave, midi, start: t, duration: dur, end: t + dur });
+      }
+    }
+    t += dur;
+  });
+
+  return { notes, totalDuration: t, errors };
+}
+
+// ---------- Practice state ----------
+let practiceNotes = [];
+let practiceTotalDuration = 0;
+let practiceRunning = false;
+let practiceStartPerf = 0;
+let sampleHistory = [];
+let activeFrames = 0;
+let goodFrames = 0;
+let practiceMinMidi = 60, practiceMaxMidi = 72;
+
+const VISIBLE_SECONDS = 6;
+const NOW_X_RATIO = 0.28;
+
+async function startPractice() {
+  const refA = parseFloat(refPitchInput.value) || 440;
+  const bpm = parseFloat(bpmInput.value) || 100;
+  const { notes, totalDuration, errors } = parseMelody(melodyInput.value, bpm);
+
+  if (errors.length) {
+    finalScoreEl.textContent = errors.join(" / ");
+    return;
+  }
+  const pitched = notes.filter(n => !n.isRest);
+  if (pitched.length === 0) {
+    finalScoreEl.textContent = "メロディが空です。音符を入力してください。";
+    return;
+  }
+
+  if (!micRunning) {
+    try { await start(); } catch (e) { return; }
+  }
+
+  practiceNotes = notes;
+  practiceTotalDuration = totalDuration;
+  const midis = pitched.map(n => n.midi);
+  practiceMinMidi = Math.min(...midis) - 2;
+  practiceMaxMidi = Math.max(...midis) + 2;
+
+  sampleHistory = [];
+  activeFrames = 0;
+  goodFrames = 0;
+  practiceStartPerf = performance.now();
+  practiceRunning = true;
+  finalScoreEl.innerHTML = "";
+  liveScoreEl.textContent = "--";
+  practiceBtn.textContent = "停止";
+  practiceBtn.classList.add("stop");
+}
+
+function stopPractice(silent) {
+  practiceRunning = false;
+  practiceBtn.textContent = "練習スタート";
+  practiceBtn.classList.remove("stop");
+  if (!silent) showFinalScore();
+}
+
+function updatePractice(freq, refA) {
+  const elapsed = (performance.now() - practiceStartPerf) / 1000;
+  practiceTimeEl.textContent = elapsed.toFixed(1) + "s";
+
+  if (elapsed > practiceTotalDuration + 1.0) {
+    stopPractice(false);
+    drawPracticeCanvas(practiceTotalDuration);
+    return;
+  }
+
+  const midiVal = freq ? freqToMidi(freq, refA) : null;
+  sampleHistory.push({ t: elapsed, midi: midiVal });
+  while (sampleHistory.length && sampleHistory[0].t < elapsed - (VISIBLE_SECONDS * 2)) {
+    sampleHistory.shift();
+  }
+
+  const activeNote = practiceNotes.find(n => !n.isRest && elapsed >= n.start && elapsed < n.end);
+  if (activeNote) {
+    activeFrames++;
+    if (midiVal !== null && Math.abs(midiVal - activeNote.midi) * 100 <= 50) {
+      goodFrames++;
+    }
+  }
+  liveScoreEl.textContent = activeFrames ? Math.round((goodFrames / activeFrames) * 100) + "%" : "--";
+
+  drawPracticeCanvas(elapsed);
+}
+
+function showFinalScore() {
+  const score = activeFrames ? Math.round((goodFrames / activeFrames) * 100) : 0;
+  let msg;
+  if (score >= 90) msg = "パーフェクト！";
+  else if (score >= 75) msg = "上手い！";
+  else if (score >= 50) msg = "まずまず、もう一回どう？";
+  else msg = "練習あるのみ！";
+  finalScoreEl.innerHTML = `<span class="big">${score}点</span>${msg}`;
+}
+
+practiceBtn.addEventListener("click", () => {
+  if (practiceRunning) stopPractice(false);
+  else startPractice();
+});
+
+function midiToY(midi, h, topPad) {
+  const usable = h - topPad * 2;
+  const range = practiceMaxMidi - practiceMinMidi;
+  return topPad + (practiceMaxMidi - midi) * (usable / range);
+}
+
+function timeToX(t, elapsed, w, nowX) {
+  const pxPerSec = w / VISIBLE_SECONDS;
+  return nowX + (t - elapsed) * pxPerSec;
+}
+
+function drawPracticeCanvas(elapsed) {
+  const w = practiceCanvas.width, h = practiceCanvas.height;
+  const topPad = 20;
+  const nowX = w * NOW_X_RATIO;
+  practiceCtx.clearRect(0, 0, w, h);
+
+  // grid lines for used pitches
+  const usedMidis = [...new Set(practiceNotes.filter(n => !n.isRest).map(n => n.midi))];
+  practiceCtx.font = "11px -apple-system, sans-serif";
+  usedMidis.forEach(m => {
+    const y = midiToY(m, h, topPad);
+    practiceCtx.strokeStyle = "rgba(255,255,255,0.06)";
+    practiceCtx.beginPath();
+    practiceCtx.moveTo(0, y);
+    practiceCtx.lineTo(w, y);
+    practiceCtx.stroke();
+    const { name, octave } = midiToNameOctave(m);
+    practiceCtx.fillStyle = "#5b6270";
+    practiceCtx.fillText(name + octave, 6, y - 4);
+  });
+
+  // now line
+  practiceCtx.strokeStyle = "rgba(95,168,255,0.6)";
+  practiceCtx.setLineDash([4, 4]);
+  practiceCtx.beginPath();
+  practiceCtx.moveTo(nowX, 0);
+  practiceCtx.lineTo(nowX, h);
+  practiceCtx.stroke();
+  practiceCtx.setLineDash([]);
+
+  // target note bars
+  const barH = Math.max(8, ((h - topPad * 2) / (practiceMaxMidi - practiceMinMidi)) * 0.55);
+  practiceNotes.forEach(n => {
+    if (n.isRest) return;
+    const x1 = timeToX(n.start, elapsed, w, nowX);
+    const x2 = timeToX(n.end, elapsed, w, nowX);
+    if (x2 < -20 || x1 > w + 20) return;
+    const y = midiToY(n.midi, h, topPad);
+
+    const isActive = elapsed >= n.start && elapsed < n.end;
+    const isPast = elapsed >= n.end;
+    let color = "#3a5f99";
+    if (isPast) color = "#2a3242";
+    if (isActive) color = "#5fa8ff";
+
+    practiceCtx.fillStyle = color;
+    const bw = Math.max(2, x2 - x1 - 2);
+    roundRect(practiceCtx, x1 + 1, y - barH / 2, bw, barH, 5);
+    practiceCtx.fill();
+
+    if (isActive) {
+      practiceCtx.strokeStyle = "#ffffff";
+      practiceCtx.lineWidth = 1.5;
+      roundRect(practiceCtx, x1 + 1, y - barH / 2, bw, barH, 5);
+      practiceCtx.stroke();
+    }
+  });
+
+  // user pitch trace
+  practiceCtx.lineWidth = 3;
+  practiceCtx.strokeStyle = "#35d07f";
+  practiceCtx.beginPath();
+  let drawing = false;
+  let lastPt = null;
+  sampleHistory.forEach(s => {
+    const x = timeToX(s.t, elapsed, w, nowX);
+    if (x < -10 || x > w + 10) return;
+    if (s.midi === null) { drawing = false; return; }
+    const y = midiToY(s.midi, h, topPad);
+    if (!drawing) { practiceCtx.moveTo(x, y); drawing = true; }
+    else practiceCtx.lineTo(x, y);
+    lastPt = { x, y };
+  });
+  practiceCtx.stroke();
+
+  if (lastPt) {
+    practiceCtx.fillStyle = "#ffffff";
+    practiceCtx.beginPath();
+    practiceCtx.arc(lastPt.x, lastPt.y, 5, 0, Math.PI * 2);
+    practiceCtx.fill();
+  }
+
+  // progress text
+  practiceCtx.fillStyle = "#8b93a3";
+  practiceCtx.font = "11px -apple-system, sans-serif";
+  practiceCtx.textAlign = "right";
+  practiceCtx.fillText(elapsed.toFixed(1) + "s / " + practiceTotalDuration.toFixed(1) + "s", w - 8, h - 8);
+  practiceCtx.textAlign = "left";
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// initial idle draw for practice canvas
+(function initialPracticeDraw() {
+  const { notes, totalDuration } = parseMelody(melodyInput.value, parseFloat(bpmInput.value) || 100);
+  practiceNotes = notes;
+  practiceTotalDuration = totalDuration;
+  const midis = notes.filter(n => !n.isRest).map(n => n.midi);
+  if (midis.length) {
+    practiceMinMidi = Math.min(...midis) - 2;
+    practiceMaxMidi = Math.max(...midis) + 2;
+  }
+  drawPracticeCanvas(0);
+})();
+</script>
+</body>
+</html>
