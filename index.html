@@ -50,7 +50,7 @@
     justify-content: center;
     gap: 16px;
     flex-wrap: wrap;
-    margin-bottom: 20px;
+    margin-bottom: 12px;
   }
   button {
     appearance: none;
@@ -76,7 +76,7 @@
     font-size: 13px;
     color: var(--sub);
   }
-  .ref-row input {
+  .ref-row input[type="number"] {
     width: 64px;
     background: var(--bg);
     border: 1px solid var(--line);
@@ -85,6 +85,23 @@
     padding: 6px 8px;
     font-size: 13px;
     text-align: center;
+  }
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--sub);
+  }
+  .slider-row input[type="range"] {
+    width: 110px;
+    accent-color: var(--accent);
+  }
+  .slider-row .val {
+    min-width: 42px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
   }
   #status {
     font-size: 13px;
@@ -246,6 +263,34 @@
     margin-top: 12px;
     flex-wrap: wrap;
   }
+
+  .staff-label {
+    text-align: left;
+    font-size: 12px;
+    color: var(--sub);
+    margin: 18px 0 8px;
+  }
+  .staff-wrap {
+    width: 100%;
+    overflow-x: auto;
+    border-radius: 10px;
+    background: #0b0d12;
+    border: 1px solid var(--line);
+    margin-bottom: 18px;
+  }
+  canvas#staffCanvas { display: block; }
+
+  .settings-row {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 4px 0 18px;
+    padding: 12px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 10px;
+  }
+
   .practice-controls {
     display: flex;
     gap: 12px;
@@ -296,6 +341,11 @@
       基準ピッチ (A4) =
       <input id="refPitch" type="number" value="440" min="415" max="466" step="1"> Hz
     </div>
+    <div class="slider-row">
+      マイク感度
+      <input id="sensitivityInput" type="range" min="1" max="10" step="1" value="7">
+      <span class="val" id="sensitivityVal">7</span>
+    </div>
   </div>
   <div id="status">マイクの使用を許可すると計測が始まります</div>
 
@@ -342,12 +392,25 @@ G4 1
 F4 2
 D4 2</textarea>
         <div class="melody-hint">
-          例: <code>C4 1</code> は「ド（4オクターブ）を1拍」。シャープは <code>C#4</code>、休符は <code>R 1</code>。
+          例: <code>C4 1</code> は「ド（4オクターブ）を1拍」。シャープは <code>C#4</code>、休符は <code>R 1</code>。付点は <code>1.5</code> のように小数で指定可。
         </div>
         <div class="melody-row">
           <div class="ref-row">
             テンポ (BPM) = <input id="bpmInput" type="number" value="100" min="30" max="240" step="1">
           </div>
+        </div>
+      </div>
+
+      <div class="staff-label">楽譜プレビュー</div>
+      <div class="staff-wrap">
+        <canvas id="staffCanvas" width="900" height="160"></canvas>
+      </div>
+
+      <div class="settings-row">
+        <div class="slider-row">
+          判定の甘さ
+          <input id="toleranceInput" type="range" min="20" max="150" step="5" value="80">
+          <span class="val" id="toleranceVal">±80¢</span>
         </div>
       </div>
 
@@ -376,6 +439,7 @@ D4 2</textarea>
 <script>
 const noteStrings = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 const noteIndex = {C:0,"C#":1,DB:1,D:2,"D#":3,EB:3,E:4,F:5,"F#":6,GB:6,G:7,"G#":8,AB:8,A:9,"A#":10,BB:10,B:11};
+const letterDiatonic = {C:0,D:1,E:2,F:3,G:4,A:5,B:6};
 
 function noteNameToMidi(raw) {
   const m = raw.trim().toUpperCase().match(/^([A-G])(#|B)?(-?\d+)$/);
@@ -412,7 +476,7 @@ function frequencyToNote(frequency, refA) {
 }
 
 // ACF2+ autocorrelation pitch detection
-function autoCorrelate(buf, sampleRate) {
+function autoCorrelate(buf, sampleRate, rmsThreshold) {
   const SIZE = buf.length;
   let rms = 0;
   for (let i = 0; i < SIZE; i++) {
@@ -420,7 +484,7 @@ function autoCorrelate(buf, sampleRate) {
     rms += val * val;
   }
   rms = Math.sqrt(rms / SIZE);
-  if (rms < 0.01) return -1;
+  if (rms < rmsThreshold) return -1;
 
   let r1 = 0, r2 = SIZE - 1;
   const thres = 0.2;
@@ -480,17 +544,23 @@ const centsEl = document.getElementById("cents");
 const statusEl = document.getElementById("status");
 const toggleBtn = document.getElementById("toggleBtn");
 const refPitchInput = document.getElementById("refPitch");
+const sensitivityInput = document.getElementById("sensitivityInput");
+const sensitivityVal = document.getElementById("sensitivityVal");
 const waveCanvas = document.getElementById("wave");
 const waveCtx = waveCanvas.getContext("2d");
 
 const melodyInput = document.getElementById("melodyInput");
 const bpmInput = document.getElementById("bpmInput");
+const toleranceInput = document.getElementById("toleranceInput");
+const toleranceVal = document.getElementById("toleranceVal");
 const practiceBtn = document.getElementById("practiceBtn");
 const practiceCanvas = document.getElementById("practiceCanvas");
 const practiceCtx = practiceCanvas.getContext("2d");
 const practiceTimeEl = document.getElementById("practiceTime");
 const liveScoreEl = document.getElementById("liveScore");
 const finalScoreEl = document.getElementById("finalScore");
+const staffCanvas = document.getElementById("staffCanvas");
+const staffCtx = staffCanvas.getContext("2d");
 
 // ---------- Tabs ----------
 document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -500,6 +570,18 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.classList.add("active");
     document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
   });
+});
+
+// sensitivity: slider 1(鈍い)-10(敏感) -> RMS threshold 0.02..0.0015
+function currentRmsThreshold() {
+  const v = parseFloat(sensitivityInput.value) || 7;
+  return 0.021 - v * 0.0019;
+}
+sensitivityInput.addEventListener("input", () => {
+  sensitivityVal.textContent = sensitivityInput.value;
+});
+toleranceInput.addEventListener("input", () => {
+  toleranceVal.textContent = "±" + toleranceInput.value + "¢";
 });
 
 // ---------- Shared audio state ----------
@@ -587,7 +669,7 @@ function processFrame() {
   waveCtx.stroke();
 
   const refA = parseFloat(refPitchInput.value) || 440;
-  const freq = autoCorrelate(timeBuffer, audioCtx.sampleRate);
+  const freq = autoCorrelate(timeBuffer, audioCtx.sampleRate, currentRmsThreshold());
   const validFreq = (freq !== -1 && freq > 30 && freq < 5000) ? freq : null;
 
   updateTunerUI(validFreq, refA);
@@ -623,29 +705,32 @@ function parseMelody(text, bpm) {
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
   const notes = [];
   let t = 0;
+  let tb = 0;
   const errors = [];
 
   lines.forEach((line, i) => {
     const parts = line.split(/\s+/);
     const rawName = parts[0];
-    const beats = parts[1] !== undefined ? parseFloat(parts[1]) : 1;
-    const dur = (isNaN(beats) ? 1 : beats) * secPerBeat;
+    const beatsRaw = parts[1] !== undefined ? parseFloat(parts[1]) : 1;
+    const beats = isNaN(beatsRaw) ? 1 : beatsRaw;
+    const dur = beats * secPerBeat;
 
     if (rawName.toUpperCase() === "R") {
-      notes.push({ isRest: true, start: t, duration: dur, end: t + dur });
+      notes.push({ isRest: true, start: t, duration: dur, end: t + dur, startBeat: tb, durationBeats: beats, endBeat: tb + beats });
     } else {
       const midi = noteNameToMidi(rawName);
       if (midi === null) {
         errors.push(`${i + 1}行目: "${rawName}" は音名として認識できません`);
       } else {
         const { name, octave } = midiToNameOctave(midi);
-        notes.push({ isRest: false, name: name + octave, midi, start: t, duration: dur, end: t + dur });
+        notes.push({ isRest: false, name: name + octave, midi, start: t, duration: dur, end: t + dur, startBeat: tb, durationBeats: beats, endBeat: tb + beats });
       }
     }
     t += dur;
+    tb += beats;
   });
 
-  return { notes, totalDuration: t, errors };
+  return { notes, totalDuration: t, totalBeats: tb, errors };
 }
 
 // ---------- Practice state ----------
@@ -655,11 +740,16 @@ let practiceRunning = false;
 let practiceStartPerf = 0;
 let sampleHistory = [];
 let activeFrames = 0;
-let goodFrames = 0;
+let scoreSum = 0;
 let practiceMinMidi = 60, practiceMaxMidi = 72;
+let practicePitchBuffer = [];
+let smoothedPracticeMidi = null;
 
 const VISIBLE_SECONDS = 6;
 const NOW_X_RATIO = 0.28;
+const ATTACK_GRACE = 0.1; // seconds to ignore right after a note starts (attack transient)
+const MEDIAN_WINDOW = 5;
+const EMA_ALPHA = 0.45;
 
 async function startPractice() {
   const refA = parseFloat(refPitchInput.value) || 440;
@@ -688,7 +778,9 @@ async function startPractice() {
 
   sampleHistory = [];
   activeFrames = 0;
-  goodFrames = 0;
+  scoreSum = 0;
+  practicePitchBuffer = [];
+  smoothedPracticeMidi = null;
   practiceStartPerf = performance.now();
   practiceRunning = true;
   finalScoreEl.innerHTML = "";
@@ -704,6 +796,27 @@ function stopPractice(silent) {
   if (!silent) showFinalScore();
 }
 
+function stabilizePitch(rawMidi) {
+  practicePitchBuffer.push(rawMidi);
+  if (practicePitchBuffer.length > MEDIAN_WINDOW) practicePitchBuffer.shift();
+  const valid = practicePitchBuffer.filter(v => v !== null);
+
+  if (valid.length === 0) {
+    smoothedPracticeMidi = null;
+    return null;
+  }
+
+  const sorted = [...valid].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+
+  if (smoothedPracticeMidi === null) {
+    smoothedPracticeMidi = median;
+  } else {
+    smoothedPracticeMidi = smoothedPracticeMidi * (1 - EMA_ALPHA) + median * EMA_ALPHA;
+  }
+  return smoothedPracticeMidi;
+}
+
 function updatePractice(freq, refA) {
   const elapsed = (performance.now() - practiceStartPerf) / 1000;
   practiceTimeEl.textContent = elapsed.toFixed(1) + "s";
@@ -714,26 +827,31 @@ function updatePractice(freq, refA) {
     return;
   }
 
-  const midiVal = freq ? freqToMidi(freq, refA) : null;
-  sampleHistory.push({ t: elapsed, midi: midiVal });
+  const rawMidi = freq ? freqToMidi(freq, refA) : null;
+  const stableMidi = stabilizePitch(rawMidi);
+
+  sampleHistory.push({ t: elapsed, midi: stableMidi });
   while (sampleHistory.length && sampleHistory[0].t < elapsed - (VISIBLE_SECONDS * 2)) {
     sampleHistory.shift();
   }
 
   const activeNote = practiceNotes.find(n => !n.isRest && elapsed >= n.start && elapsed < n.end);
-  if (activeNote) {
+  if (activeNote && (elapsed - activeNote.start) >= ATTACK_GRACE) {
     activeFrames++;
-    if (midiVal !== null && Math.abs(midiVal - activeNote.midi) * 100 <= 50) {
-      goodFrames++;
+    if (stableMidi !== null) {
+      const tolerance = parseFloat(toleranceInput.value) || 80;
+      const centsDiff = Math.abs(stableMidi - activeNote.midi) * 100;
+      const frameScore = Math.max(0, 1 - centsDiff / tolerance);
+      scoreSum += frameScore;
     }
   }
-  liveScoreEl.textContent = activeFrames ? Math.round((goodFrames / activeFrames) * 100) + "%" : "--";
+  liveScoreEl.textContent = activeFrames ? Math.round((scoreSum / activeFrames) * 100) + "%" : "--";
 
   drawPracticeCanvas(elapsed);
 }
 
 function showFinalScore() {
-  const score = activeFrames ? Math.round((goodFrames / activeFrames) * 100) : 0;
+  const score = activeFrames ? Math.round((scoreSum / activeFrames) * 100) : 0;
   let msg;
   if (score >= 90) msg = "パーフェクト！";
   else if (score >= 75) msg = "上手い！";
@@ -858,18 +976,233 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-// initial idle draw for practice canvas
-(function initialPracticeDraw() {
-  const { notes, totalDuration } = parseMelody(melodyInput.value, parseFloat(bpmInput.value) || 100);
-  practiceNotes = notes;
-  practiceTotalDuration = totalDuration;
-  const midis = notes.filter(n => !n.isRest).map(n => n.midi);
-  if (midis.length) {
-    practiceMinMidi = Math.min(...midis) - 2;
-    practiceMaxMidi = Math.max(...midis) + 2;
+// ---------- Staff notation preview ----------
+function noteInfoFromMidi(midi) {
+  const { name, octave } = midiToNameOctave(midi);
+  const letter = name[0];
+  const isSharp = name.length > 1;
+  const diatonic = octave * 7 + letterDiatonic[letter];
+  return { letter, isSharp, diatonic, octave };
+}
+
+function durationToShape(beats) {
+  const table = [
+    { beats: 4,    type: "whole",     flags: 0, dotted: false },
+    { beats: 3,    type: "half",      flags: 0, dotted: true },
+    { beats: 2,    type: "half",      flags: 0, dotted: false },
+    { beats: 1.5,  type: "quarter",   flags: 0, dotted: true },
+    { beats: 1,    type: "quarter",   flags: 0, dotted: false },
+    { beats: 0.75, type: "eighth",    flags: 1, dotted: true },
+    { beats: 0.5,  type: "eighth",    flags: 1, dotted: false },
+    { beats: 0.375,type: "sixteenth", flags: 2, dotted: true },
+    { beats: 0.25, type: "sixteenth", flags: 2, dotted: false },
+  ];
+  let best = table[4], bestDiff = Infinity;
+  table.forEach(t => {
+    const diff = Math.abs(t.beats - beats);
+    if (diff < bestDiff) { bestDiff = diff; best = t; }
+  });
+  return best;
+}
+
+const STAFF_TOP_DIATONIC = 38; // F5, top line
+const STAFF_BOTTOM_DIATONIC = 30; // E4, bottom line
+
+function staffY(diatonic, staffTop, halfGap) {
+  return staffTop + (STAFF_TOP_DIATONIC - diatonic) * halfGap;
+}
+
+function drawLedgerLines(ctx, diatonic, x, staffTop, halfGap) {
+  ctx.strokeStyle = "#8b93a3";
+  ctx.lineWidth = 1.2;
+  if (diatonic < STAFF_BOTTOM_DIATONIC) {
+    const count = Math.floor((STAFF_BOTTOM_DIATONIC - diatonic) / 2);
+    for (let i = 1; i <= count; i++) {
+      const d = STAFF_BOTTOM_DIATONIC - 2 * i;
+      const y = staffY(d, staffTop, halfGap);
+      ctx.beginPath(); ctx.moveTo(x - 10, y); ctx.lineTo(x + 10, y); ctx.stroke();
+    }
+  } else if (diatonic > STAFF_TOP_DIATONIC) {
+    const count = Math.floor((diatonic - STAFF_TOP_DIATONIC) / 2);
+    for (let i = 1; i <= count; i++) {
+      const d = STAFF_TOP_DIATONIC + 2 * i;
+      const y = staffY(d, staffTop, halfGap);
+      ctx.beginPath(); ctx.moveTo(x - 10, y); ctx.lineTo(x + 10, y); ctx.stroke();
+    }
   }
-  drawPracticeCanvas(0);
-})();
+}
+
+function drawRest(ctx, x, y, durationBeats) {
+  ctx.fillStyle = "#c7cdd8";
+  ctx.strokeStyle = "#c7cdd8";
+  if (durationBeats >= 4) {
+    ctx.fillRect(x - 8, y - 4, 16, 6);
+  } else if (durationBeats >= 2) {
+    ctx.fillRect(x - 8, y - 2, 16, 6);
+  } else {
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(x - 3, y - 12);
+    ctx.bezierCurveTo(x + 7, y - 4, x - 7, y + 2, x + 5, y + 12);
+    ctx.stroke();
+  }
+}
+
+function drawFlag(ctx, stemX, stemTipY, stemDir, count) {
+  ctx.strokeStyle = "#eef1f5";
+  ctx.lineWidth = 1.6;
+  for (let i = 0; i < count; i++) {
+    const yOff = stemDir === "up" ? i * 7 : -i * 7;
+    const startY = stemTipY + yOff;
+    ctx.beginPath();
+    ctx.moveTo(stemX, startY);
+    if (stemDir === "up") {
+      ctx.bezierCurveTo(stemX + 9, startY + 3, stemX + 9, startY + 13, stemX + 1, startY + 15);
+    } else {
+      ctx.bezierCurveTo(stemX + 9, startY - 3, stemX + 9, startY - 13, stemX + 1, startY - 15);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawStaff(notes, totalBeats) {
+  const pxPerBeat = 56;
+  const leftMargin = 56;
+  const rightPad = 40;
+  const staffTop = 55;
+  const lineGap = 11;
+  const halfGap = lineGap / 2;
+  const width = Math.max(560, leftMargin + Math.max(totalBeats, 1) * pxPerBeat + rightPad);
+  const height = 160;
+
+  staffCanvas.width = width;
+  staffCanvas.height = height;
+  staffCtx.clearRect(0, 0, width, height);
+
+  // staff lines
+  staffCtx.strokeStyle = "#3a4050";
+  staffCtx.lineWidth = 1.2;
+  for (let i = 0; i < 5; i++) {
+    const y = staffTop + i * lineGap;
+    staffCtx.beginPath();
+    staffCtx.moveTo(leftMargin - 20, y);
+    staffCtx.lineTo(width - 10, y);
+    staffCtx.stroke();
+  }
+
+  // treble clef (unicode glyph, approximate placement)
+  staffCtx.fillStyle = "#eef1f5";
+  staffCtx.font = (lineGap * 6.4) + "px serif";
+  staffCtx.textBaseline = "alphabetic";
+  staffCtx.fillText("\u{1D11E}", leftMargin - 20, staffTop + 4 * lineGap + 6);
+
+  // bar lines every 4 beats
+  staffCtx.strokeStyle = "#3a4050";
+  for (let b = 4; b <= totalBeats + 0.001; b += 4) {
+    const x = leftMargin + b * pxPerBeat;
+    staffCtx.beginPath();
+    staffCtx.moveTo(x, staffTop);
+    staffCtx.lineTo(x, staffTop + 4 * lineGap);
+    staffCtx.stroke();
+  }
+
+  notes.forEach(n => {
+    const x = leftMargin + n.startBeat * pxPerBeat + 14;
+    const shape = durationToShape(n.durationBeats);
+
+    if (n.isRest) {
+      drawRest(staffCtx, x, staffY(34, staffTop, halfGap), n.durationBeats);
+      return;
+    }
+
+    const info = noteInfoFromMidi(n.midi);
+    const y = staffY(info.diatonic, staffTop, halfGap);
+
+    drawLedgerLines(staffCtx, info.diatonic, x, staffTop, halfGap);
+
+    // accidental
+    if (info.isSharp) {
+      staffCtx.fillStyle = "#eef1f5";
+      staffCtx.font = (lineGap * 1.7) + "px sans-serif";
+      staffCtx.fillText("♯", x - 16, y + 5);
+    }
+
+    // notehead
+    staffCtx.save();
+    staffCtx.translate(x, y);
+    staffCtx.rotate(-0.2);
+    staffCtx.beginPath();
+    staffCtx.ellipse(0, 0, 6.2, 4.6, 0, 0, Math.PI * 2);
+    if (shape.type === "whole" || shape.type === "half") {
+      staffCtx.strokeStyle = "#eef1f5";
+      staffCtx.lineWidth = 1.8;
+      staffCtx.stroke();
+    } else {
+      staffCtx.fillStyle = "#eef1f5";
+      staffCtx.fill();
+    }
+    staffCtx.restore();
+
+    // dot
+    if (shape.dotted) {
+      staffCtx.fillStyle = "#eef1f5";
+      staffCtx.beginPath();
+      staffCtx.arc(x + 11, y - 4, 2, 0, Math.PI * 2);
+      staffCtx.fill();
+    }
+
+    // stem
+    if (shape.type !== "whole") {
+      const stemDir = info.diatonic >= 34 ? "down" : "up";
+      const stemLen = lineGap * 3.2;
+      staffCtx.strokeStyle = "#eef1f5";
+      staffCtx.lineWidth = 1.4;
+      staffCtx.beginPath();
+      let stemX, stemTipY;
+      if (stemDir === "up") {
+        stemX = x + 6;
+        stemTipY = y - stemLen;
+        staffCtx.moveTo(stemX, y);
+        staffCtx.lineTo(stemX, stemTipY);
+      } else {
+        stemX = x - 6;
+        stemTipY = y + stemLen;
+        staffCtx.moveTo(stemX, y);
+        staffCtx.lineTo(stemX, stemTipY);
+      }
+      staffCtx.stroke();
+      if (shape.flags > 0) drawFlag(staffCtx, stemX, stemTipY, stemDir, shape.flags);
+    }
+  });
+}
+
+function refreshMelodyViews() {
+  const bpm = parseFloat(bpmInput.value) || 100;
+  const { notes, totalDuration, totalBeats, errors } = parseMelody(melodyInput.value, bpm);
+  drawStaff(notes, totalBeats);
+
+  if (!practiceRunning) {
+    practiceNotes = notes;
+    practiceTotalDuration = totalDuration;
+    const midis = notes.filter(n => !n.isRest).map(n => n.midi);
+    if (midis.length) {
+      practiceMinMidi = Math.min(...midis) - 2;
+      practiceMaxMidi = Math.max(...midis) + 2;
+    }
+    drawPracticeCanvas(0);
+  }
+
+  if (errors.length) {
+    finalScoreEl.textContent = errors.join(" / ");
+  } else if (!practiceRunning) {
+    finalScoreEl.innerHTML = "";
+  }
+}
+
+melodyInput.addEventListener("input", refreshMelodyViews);
+bpmInput.addEventListener("input", refreshMelodyViews);
+
+refreshMelodyViews();
 </script>
 </body>
 </html>
