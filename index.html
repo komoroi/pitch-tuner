@@ -217,6 +217,13 @@
     color: var(--sub);
     font-variant-numeric: tabular-nums;
   }
+  #vibrato {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--accent);
+    min-height: 16px;
+    font-variant-numeric: tabular-nums;
+  }
   canvas#wave {
     width: 100%;
     height: 48px;
@@ -329,6 +336,20 @@
     color: var(--text);
     display: block;
   }
+
+  /* Review tab */
+  #reviewEmpty {
+    color: var(--sub);
+    font-size: 14px;
+    padding: 40px 10px;
+  }
+  #reviewContent { text-align: left; }
+  #reviewAudio {
+    width: 100%;
+    margin-bottom: 18px;
+    border-radius: 8px;
+  }
+  canvas#reviewWaveCanvas, canvas#reviewPitchCanvas { display: block; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -352,6 +373,7 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="tuner">チューナー</button>
     <button class="tab-btn" data-tab="practice">メロディ練習</button>
+    <button class="tab-btn" data-tab="review">振り返り</button>
   </div>
 
   <div class="tab-content active" id="tab-tuner">
@@ -370,6 +392,7 @@
         </div>
       </div>
       <div id="cents">&nbsp;</div>
+      <div id="vibrato">&nbsp;</div>
 
       <canvas id="wave" width="600" height="96"></canvas>
     </div>
@@ -432,6 +455,23 @@ D4 2</textarea>
       <canvas id="practiceCanvas" width="900" height="260"></canvas>
 
       <div id="finalScore"></div>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-review">
+    <div class="panel">
+      <div id="reviewEmpty">まだ録音がありません。マイクを開始→停止すると、直前の演奏がここに表示されます。</div>
+      <div id="reviewContent" style="display:none;">
+        <audio id="reviewAudio" controls></audio>
+        <div class="staff-label">録音の波形（クリックでシーク）</div>
+        <div class="staff-wrap">
+          <canvas id="reviewWaveCanvas" width="900" height="100"></canvas>
+        </div>
+        <div class="staff-label">ピッチの推移（クリックでシーク）</div>
+        <div class="staff-wrap">
+          <canvas id="reviewPitchCanvas" width="900" height="200"></canvas>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -562,6 +602,15 @@ const finalScoreEl = document.getElementById("finalScore");
 const staffCanvas = document.getElementById("staffCanvas");
 const staffCtx = staffCanvas.getContext("2d");
 
+const vibratoEl = document.getElementById("vibrato");
+const reviewEmptyEl = document.getElementById("reviewEmpty");
+const reviewContentEl = document.getElementById("reviewContent");
+const reviewAudio = document.getElementById("reviewAudio");
+const reviewWaveCanvas = document.getElementById("reviewWaveCanvas");
+const reviewWaveCtx = reviewWaveCanvas.getContext("2d");
+const reviewPitchCanvas = document.getElementById("reviewPitchCanvas");
+const reviewPitchCtx = reviewPitchCanvas.getContext("2d");
+
 // ---------- Tabs ----------
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -593,6 +642,52 @@ let micRunning = false;
 let timeBuffer = null;
 let smoothedCents = 0;
 
+// ---------- Vibrato detection (DSP, not ML) ----------
+// Looks for periodic oscillation in the continuous pitch signal within
+// the typical human vibrato range (~3-9 Hz) using zero-crossing counting
+// on the detrended pitch curve, plus peak-to-peak amplitude in cents.
+let vibratoBuffer = [];
+const VIBRATO_WINDOW = 1.2; // seconds of history analyzed
+
+function updateVibrato(freq, refA) {
+  const now = performance.now() / 1000;
+  vibratoBuffer.push({ t: now, cents: freq ? freqToMidi(freq, refA) * 100 : null });
+  while (vibratoBuffer.length && vibratoBuffer[0].t < now - VIBRATO_WINDOW) vibratoBuffer.shift();
+
+  const valid = vibratoBuffer.filter(p => p.cents !== null);
+  if (valid.length < 12 || (valid[valid.length - 1].t - valid[0].t) < 0.5) {
+    vibratoEl.innerHTML = "&nbsp;";
+    return;
+  }
+
+  const mean = valid.reduce((s, p) => s + p.cents, 0) / valid.length;
+  const detrended = valid.map(p => p.cents - mean);
+
+  let crossings = 0;
+  for (let i = 1; i < detrended.length; i++) {
+    if ((detrended[i - 1] <= 0 && detrended[i] > 0) || (detrended[i - 1] >= 0 && detrended[i] < 0)) crossings++;
+  }
+  const duration = valid[valid.length - 1].t - valid[0].t;
+  const rateHz = duration > 0 ? (crossings / 2) / duration : 0;
+  const extent = (Math.max(...detrended) - Math.min(...detrended)) / 2;
+
+  if (extent >= 8 && rateHz >= 3 && rateHz <= 9) {
+    vibratoEl.textContent = `ビブラート 約${rateHz.toFixed(1)}Hz ／ 振幅 ±${extent.toFixed(0)}¢`;
+  } else {
+    vibratoEl.innerHTML = "&nbsp;";
+  }
+}
+
+// ---------- Recording (for the 振り返り / review tab) ----------
+let mediaRecorder = null;
+let recordedChunks = [];
+let reviewPitchHistory = [];
+let recordStartPerf = 0;
+let currentReviewBlobUrl = null;
+let cachedAudioBuffer = null;
+let reviewDuration = 0;
+const reviewPxPerSec = 70;
+
 async function start() {
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -610,6 +705,23 @@ async function start() {
   timeBuffer = new Float32Array(analyser.fftSize);
   source.connect(analyser);
 
+  recordedChunks = [];
+  reviewPitchHistory = [];
+  recordStartPerf = performance.now();
+  mediaRecorder = null;
+  if (window.MediaRecorder) {
+    const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+    const mime = mimeCandidates.find(m => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m));
+    try {
+      mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime }) : new MediaRecorder(mediaStream);
+      mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.onstop = finalizeRecording;
+      mediaRecorder.start();
+    } catch (e) {
+      mediaRecorder = null;
+    }
+  }
+
   micRunning = true;
   toggleBtn.textContent = "マイクを停止";
   toggleBtn.classList.add("stop");
@@ -620,6 +732,7 @@ async function start() {
 function stop() {
   micRunning = false;
   if (rafId) cancelAnimationFrame(rafId);
+  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
   if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
   if (audioCtx) audioCtx.close();
   audioCtx = null;
@@ -673,7 +786,13 @@ function processFrame() {
   const validFreq = (freq !== -1 && freq > 30 && freq < 5000) ? freq : null;
 
   updateTunerUI(validFreq, refA);
+  updateVibrato(validFreq, refA);
   if (practiceRunning) updatePractice(validFreq, refA);
+
+  reviewPitchHistory.push({
+    t: (performance.now() - recordStartPerf) / 1000,
+    midi: validFreq ? freqToMidi(validFreq, refA) : null
+  });
 
   rafId = requestAnimationFrame(processFrame);
 }
@@ -1203,6 +1322,143 @@ melodyInput.addEventListener("input", refreshMelodyViews);
 bpmInput.addEventListener("input", refreshMelodyViews);
 
 refreshMelodyViews();
+
+// ---------- Review tab: waveform + pitch curve playback ----------
+async function finalizeRecording() {
+  if (!recordedChunks.length) return;
+  const mime = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
+  const blob = new Blob(recordedChunks, { type: mime });
+
+  if (currentReviewBlobUrl) URL.revokeObjectURL(currentReviewBlobUrl);
+  currentReviewBlobUrl = URL.createObjectURL(blob);
+  reviewAudio.src = currentReviewBlobUrl;
+  reviewEmptyEl.style.display = "none";
+  reviewContentEl.style.display = "block";
+
+  cachedAudioBuffer = null;
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
+    cachedAudioBuffer = await decodeCtx.decodeAudioData(arrayBuffer);
+    decodeCtx.close();
+    reviewDuration = cachedAudioBuffer.duration;
+    drawReviewWaveform(cachedAudioBuffer);
+  } catch (err) {
+    reviewDuration = reviewPitchHistory.length ? reviewPitchHistory[reviewPitchHistory.length - 1].t : 0;
+    reviewWaveCtx.clearRect(0, 0, reviewWaveCanvas.width, reviewWaveCanvas.height);
+  }
+
+  drawReviewPitch();
+}
+
+function drawReviewWaveform(audioBuffer, playheadT) {
+  const duration = audioBuffer.duration;
+  const width = Math.max(560, Math.ceil(duration * reviewPxPerSec));
+  const height = 100;
+  reviewWaveCanvas.width = width;
+  reviewWaveCanvas.height = height;
+  const ctx = reviewWaveCtx;
+  ctx.clearRect(0, 0, width, height);
+
+  const data = audioBuffer.getChannelData(0);
+  const samplesPerPx = data.length / width;
+  const mid = height / 2;
+  ctx.strokeStyle = "#35d07f";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x < width; x++) {
+    const startI = Math.floor(x * samplesPerPx);
+    const endI = Math.floor((x + 1) * samplesPerPx);
+    let min = 1, max = -1;
+    for (let i = startI; i < endI && i < data.length; i++) {
+      const v = data[i];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    if (min > max) { min = 0; max = 0; }
+    ctx.moveTo(x, mid + min * mid * 0.9);
+    ctx.lineTo(x, mid + max * mid * 0.9);
+  }
+  ctx.stroke();
+
+  if (playheadT !== undefined) {
+    const x = playheadT * reviewPxPerSec;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+  }
+}
+
+function drawReviewPitch(playheadT) {
+  const valid = reviewPitchHistory.filter(p => p.midi !== null);
+  const duration = reviewDuration || (reviewPitchHistory.length ? reviewPitchHistory[reviewPitchHistory.length - 1].t : 1);
+  const width = Math.max(560, Math.ceil(duration * reviewPxPerSec));
+  const height = 200;
+  const topPad = 20;
+  reviewPitchCanvas.width = width;
+  reviewPitchCanvas.height = height;
+  const ctx = reviewPitchCtx;
+  ctx.clearRect(0, 0, width, height);
+
+  if (valid.length) {
+    const midis = valid.map(p => p.midi);
+    const minMidi = Math.min(...midis) - 2, maxMidi = Math.max(...midis) + 2;
+    const range = Math.max(1, maxMidi - minMidi);
+    const yOf = m => topPad + (maxMidi - m) * ((height - topPad * 2) / range);
+
+    const used = [...new Set(midis.map(m => Math.round(m)))];
+    ctx.font = "10px -apple-system, sans-serif";
+    used.forEach(m => {
+      const yy = yOf(m);
+      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(width, yy); ctx.stroke();
+      const { name, octave } = midiToNameOctave(m);
+      ctx.fillStyle = "#5b6270";
+      ctx.fillText(name + octave, 4, yy - 3);
+    });
+
+    ctx.strokeStyle = "#35d07f";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    let drawing = false;
+    reviewPitchHistory.forEach(p => {
+      const x = p.t * reviewPxPerSec;
+      if (p.midi === null) { drawing = false; return; }
+      const yy = yOf(p.midi);
+      if (!drawing) { ctx.moveTo(x, yy); drawing = true; }
+      else ctx.lineTo(x, yy);
+    });
+    ctx.stroke();
+  }
+
+  if (playheadT !== undefined) {
+    const x = playheadT * reviewPxPerSec;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+  }
+}
+
+function renderReviewPlayhead() {
+  const t = reviewAudio.currentTime || 0;
+  if (cachedAudioBuffer) drawReviewWaveform(cachedAudioBuffer, t);
+  drawReviewPitch(t);
+}
+
+reviewAudio.addEventListener("timeupdate", renderReviewPlayhead);
+reviewAudio.addEventListener("seeking", renderReviewPlayhead);
+reviewAudio.addEventListener("play", renderReviewPlayhead);
+
+function seekFromCanvasClick(e, canvas) {
+  if (!reviewAudio.src) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const x = (e.clientX - rect.left) * scaleX;
+  const t = x / reviewPxPerSec;
+  reviewAudio.currentTime = Math.max(0, Math.min(t, reviewAudio.duration || t));
+}
+reviewWaveCanvas.addEventListener("click", e => seekFromCanvasClick(e, reviewWaveCanvas));
+reviewPitchCanvas.addEventListener("click", e => seekFromCanvasClick(e, reviewPitchCanvas));
 </script>
 </body>
 </html>
